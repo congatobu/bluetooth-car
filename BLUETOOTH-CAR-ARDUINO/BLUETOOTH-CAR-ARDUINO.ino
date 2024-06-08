@@ -32,9 +32,9 @@ long distance;
 // CAU HINH GUI MESSAGE QUA BLUETOOTH
 SoftwareSerial bluetooth(3, 4);  //(RX, TX) of HC-05/ HC-06
 unsigned long message_time = 0;
-int message_period = 1000;
+int message_period = 500;
 unsigned message_sequance = 0;
-String bluetooth_receiver = "";
+//String bluetooth_receiver = "";
 //--------------------------------------------------------------------------
 // CAU HINH THOI GIAN DO KHOANG CACH BANG CAM BIEN SIEU AM
 unsigned long ultrasonic_time = 0;
@@ -67,14 +67,14 @@ float hight;
 //---------------------------------------------------------------------------
 // bien dieu khien
 State state = STATE_STOP;
-Driver driver = DRIVER_AUTO;
+Driver driver = DRIVER_BLUETOOTH;
 JsonDocument move_command;
 
 void setup() {
   // begin:
   Wire.begin();
   Serial.begin(9600);
-  bluetooth.begin(9600);
+  bluetooth.begin(115200);
 
 
   // cai dat cho L298
@@ -99,33 +99,38 @@ void setup() {
   Serial.println("Setup Complete");
 
   state = STATE_MOVE_FORWARD;
-  driver = DRIVER_AUTO;
+
+  driver = DRIVER_BLUETOOTH;
 }
 
 void loop() {
 
-  bluetooth_controll();
+ 
 
   if (millis() >= ultrasonic_time + ultrasonic_period) {
     ultrasonic_time += ultrasonic_period;
-    //read_hy_srf05_sensor();
+    read_hy_srf05_sensor();
   }
 
 
   if (millis() >= qmc_5883l_time + qmc_5883l_period) {
     qmc_5883l_time += qmc_5883l_period;
-    // read_qmc_5883l_sensor();
+    read_qmc_5883l_sensor();
   }
 
   if (millis() >= bmp_180_time + bmp_180_period) {
     bmp_180_time += bmp_180_period;
-    // read_bmp180_sensor();
+    read_bmp180_sensor();
   }
-
-
+  
+ 
+  bluetooth_controll();
+  
+  
   if (millis() >= message_time + message_period) {
     message_time += message_period;
-    // send_data_to_phone();
+    send_data_to_phone();
+    
   }
 
   //----------------------------------------------------------------
@@ -134,7 +139,6 @@ void loop() {
 
   if (driver == DRIVER_AUTO) {
     move_auto();
-    //delay(500);
   } else {
     move_by_bluetooth(move_command);
   }
@@ -170,7 +174,7 @@ void send_data_to_phone() {
 
   serializeJson(doc, out);
 
-  Serial.println(out);
+  //Serial.println(out);
 
   bluetooth.println(out);
 
@@ -181,65 +185,65 @@ void send_data_to_phone() {
 
 void bluetooth_controll() {
 
-  if (Serial.available()) {
-    String command = Serial.readString();
-    bluetooth.println(command);
-    Serial.print("BLUETOOTH SEND >> " + command);
-  }
+ 
 
 
-  static String input_chars;
+  // static String input_chars;
+  // while (bluetooth.available()) {
+  //   char input_char = (char)bluetooth.read();
+  //   if (input_char == '\n') {
+  //     bluetooth_receiver = input_chars;
+  //     input_chars = "";
+  //   } else {
+  //     input_chars += input_char;
+  //   }
+  // }
 
-  while (bluetooth.available()) {
+  // if (bluetooth_receiver == "") {
+  //   return;
+  // }
 
-    char input_char = (char)bluetooth.read();
 
-    if (input_char == '\n') {
+  if (bluetooth.available()) {
+    String bluetooth_receiver = bluetooth.readStringUntil('\n');
+    JsonDocument document;
+    DeserializationError error = deserializeJson(document, bluetooth_receiver);
 
-      bluetooth_receiver = input_chars;
+    while (bluetooth.available()) {
+      bluetooth.read();
+    }
 
-      input_chars = "";
+    if (error) {
+      Serial.println(bluetooth_receiver);
+      //   Serial.print("deserializeJson() failed: ");
+      //   Serial.println(error.f_str());
+      return;
+    }
 
-    } else {
-      input_chars += input_char;
+    String command = document["cmd"];
+
+    //Serial.print("nhan du lieu: ");
+    //Serial.println(bluetooth_receiver);
+
+    if (command == "MOVE") {
+
+      move_command = document;
+    }
+
+    if (command == "DRIVE") {
+      String dri = document["mode"];
+      if (dri == "manual") {
+        driver = DRIVER_BLUETOOTH;
+      }
+      if (dri == "auto") {
+        driver = DRIVER_AUTO;
+      }
     }
   }
 
-  if (bluetooth_receiver == "") {
-    return;
-  }
 
 
-  JsonDocument document;
-  DeserializationError error = deserializeJson(document, bluetooth_receiver);
-
-  if (error) {
-    Serial.print(bluetooth_receiver);
-    //   Serial.print("deserializeJson() failed: ");
-    //   Serial.println(error.f_str());
-    return;
-  }
-
-  String command = document["cmd"];
-  
-  Serial.print("nhan du lieu: ");Serial.println(bluetooth_receiver);
-
-  if (command == "MOVE") {
-
-    move_command = document;
-  }
-
-  if (command == "DRIVE") {
-    String dri = document["mode"];
-    if (dri == "manual") {
-      driver = DRIVER_BLUETOOTH;
-    }
-    if (dri == "auto") {
-      driver = DRIVER_AUTO;
-    }
-  }
-
-  bluetooth_receiver = "";
+  //bluetooth_receiver = "";
 }
 //------------------------------------------------------------------
 
@@ -268,8 +272,6 @@ long read_hy_srf05_sensor() {
 void read_qmc_5883l_sensor() {
 
   heading = qmc_5883l_sensor.readHeading();
-
-  // Serial.print("heading ");Serial.println(heading);
 }
 
 void read_bmp180_sensor() {
@@ -279,10 +281,6 @@ void read_bmp180_sensor() {
   pressure = bmp_180_sensor.readPressure();
 
   hight = bmp_180_sensor.readAltitude();
-
-  // Serial.print("temperature ");Serial.println(temperature);
-  // Serial.print("pressure ");Serial.println(pressure);
-  // Serial.print("hight ");Serial.println(hight);
 }
 
 
