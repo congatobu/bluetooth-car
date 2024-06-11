@@ -46,7 +46,7 @@ int bmp_180_period = 1000;
 
 // CAU HINH THOI GIAN DOC TOA DO TU QMC5883L
 unsigned long qmc_5883l_time = 0;
-int qmc_5883l_period = 200;
+int qmc_5883l_period = 250;
 
 // CAU HINH THOI GIAN TU DONG QUAY CUA XE
 unsigned long turn_time = 0;
@@ -74,7 +74,7 @@ void setup() {
   // begin:
   Wire.begin();
   Serial.begin(9600);
-  bluetooth.begin(115200);
+  bluetooth.begin(9600);
 
 
   // cai dat cho L298
@@ -105,7 +105,8 @@ void setup() {
 
 void loop() {
 
- 
+
+  bluetooth_controll();
 
   if (millis() >= ultrasonic_time + ultrasonic_period) {
     ultrasonic_time += ultrasonic_period;
@@ -122,15 +123,15 @@ void loop() {
     bmp_180_time += bmp_180_period;
     read_bmp180_sensor();
   }
-  
- 
-  bluetooth_controll();
-  
-  
+
+
+
+
+
   if (millis() >= message_time + message_period) {
     message_time += message_period;
-    send_data_to_phone();
-    
+    //Serial.println("-------------------- read sensor ----------------------");
+    //send_data_to_phone();
   }
 
   //----------------------------------------------------------------
@@ -151,24 +152,19 @@ void loop() {
 void send_data_to_phone() {
 
 
+  long start_time = millis();
+
   JsonDocument doc;
 
-  doc["cmd"] = "DATA";
+  doc["d"] = distance;
 
-  message_sequance += 1;
+  doc["a"] = heading;
 
-  doc["seq"] = message_sequance;
+  doc["t"] = temperature;
 
-  doc["dist"] = distance;
+  doc["p"] = pressure;
 
-
-  doc["heading"] = heading;
-
-  doc["temp"] = temperature;
-
-  doc["press"] = pressure;
-
-  doc["hight"] = hight;
+  doc["h"] = hight;
 
   String out;
 
@@ -176,42 +172,31 @@ void send_data_to_phone() {
 
   //Serial.println(out);
 
+  // long temp_time = millis();
+  // long serialize_time = temp_time - start_time;
+  // Serial.println(serialize_time);
+
   bluetooth.println(out);
 
   bluetooth.flush();
+
+  // long end_time = millis();
+  // long run_time = end_time - start_time;
+  //Serial.println(run_time);
 }
 
 //------------------------------------------------------------------
 
 void bluetooth_controll() {
 
- 
-
-
-  // static String input_chars;
-  // while (bluetooth.available()) {
-  //   char input_char = (char)bluetooth.read();
-  //   if (input_char == '\n') {
-  //     bluetooth_receiver = input_chars;
-  //     input_chars = "";
-  //   } else {
-  //     input_chars += input_char;
-  //   }
-  // }
-
-  // if (bluetooth_receiver == "") {
-  //   return;
-  // }
 
 
   if (bluetooth.available()) {
+    long start_time = millis();
     String bluetooth_receiver = bluetooth.readStringUntil('\n');
     JsonDocument document;
     DeserializationError error = deserializeJson(document, bluetooth_receiver);
 
-    while (bluetooth.available()) {
-      bluetooth.read();
-    }
 
     if (error) {
       Serial.println(bluetooth_receiver);
@@ -220,30 +205,33 @@ void bluetooth_controll() {
       return;
     }
 
-    String command = document["cmd"];
+    String command = document["c"];
 
-    //Serial.print("nhan du lieu: ");
-    //Serial.println(bluetooth_receiver);
+    // //Serial.print("nhan du lieu: ");
+    Serial.println(bluetooth_receiver);
 
-    if (command == "MOVE") {
-
+    if (command == "M") {
+      move_command = NULL;
       move_command = document;
     }
 
-    if (command == "DRIVE") {
-      String dri = document["mode"];
-      if (dri == "manual") {
+    if (command == "D") {
+      String dri = document["m"];
+      if (dri == "m") {
         driver = DRIVER_BLUETOOTH;
       }
-      if (dri == "auto") {
+      if (dri == "a") {
         driver = DRIVER_AUTO;
       }
     }
+
+
+
+    send_data_to_phone();
+    long end_time = millis();
+    long run_time = end_time - start_time;
+    Serial.println(run_time);
   }
-
-
-
-  //bluetooth_receiver = "";
 }
 //------------------------------------------------------------------
 
