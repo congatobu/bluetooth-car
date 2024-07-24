@@ -124,16 +124,6 @@ void loop() {
     read_bmp180_sensor();
   }
 
-
-
-
-
-  if (millis() >= message_time + message_period) {
-    message_time += message_period;
-    //Serial.println("-------------------- read sensor ----------------------");
-    //send_data_to_phone();
-  }
-
   //----------------------------------------------------------------
 
 
@@ -152,7 +142,7 @@ void loop() {
 void send_data_to_phone() {
 
 
-  long start_time = millis();
+ // long start_time = millis();
 
   JsonDocument doc;
 
@@ -170,7 +160,7 @@ void send_data_to_phone() {
 
   serializeJson(doc, out);
 
-  //Serial.println(out);
+  Serial.println(out);
 
   // long temp_time = millis();
   // long serialize_time = temp_time - start_time;
@@ -188,11 +178,8 @@ void send_data_to_phone() {
 //------------------------------------------------------------------
 
 void bluetooth_controll() {
-
-
-
   if (bluetooth.available()) {
-    long start_time = millis();
+    // long start_time = millis();
     String bluetooth_receiver = bluetooth.readStringUntil('\n');
     JsonDocument document;
     DeserializationError error = deserializeJson(document, bluetooth_receiver);
@@ -225,12 +212,10 @@ void bluetooth_controll() {
       }
     }
 
-
-
     send_data_to_phone();
-    long end_time = millis();
-    long run_time = end_time - start_time;
-    Serial.println(run_time);
+    // long end_time = millis();
+    // long run_time = end_time - start_time;
+    // Serial.println(run_time);
   }
 }
 //------------------------------------------------------------------
@@ -276,6 +261,11 @@ void read_bmp180_sensor() {
 //------------------------------------------------------------------
 // di chuyen theo chi dan bang bluetooth
 void move_by_bluetooth(JsonDocument document) {
+
+  if (document == NULL) {
+    return;
+  }
+  
 
   // Serial.println("move to xx");
   float x = document["x"].as<float>();
