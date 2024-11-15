@@ -1,7 +1,7 @@
 #include <SoftwareSerial.h>
 #include <ArduinoJson.h>
 #include <Adafruit_BMP085.h>
-#include "QMC5883L.h"
+#include <QMC5883LCompass.h>
 #include <Wire.h>
 #include "Directions.h"
 //--------------------------------------------
@@ -19,41 +19,57 @@
 #define L298N_IN4 9
 #define L298N_ENB 5
 
+#define GAS_SENSOR 12
+
+#define ETHANOL_SENSOR 13
+
 
 #define MAX_DISTANCE 30
 #define WHEEL_SPEED 150
 #define SERVO_INTERVL = 20
 
 //--------------------------------------------
-#define HY_SRF_TRIGGER A0
-#define HY_SRF_ECHO A1
+#define HY_SRF_TRIGGER A2
+#define HY_SRF_ECHO A3
 long distance;
+
 //--------------------------------------------------------------------------
 // CAU HINH GUI MESSAGE QUA BLUETOOTH
-SoftwareSerial bluetooth(3, 4);  //(RX, TX) of HC-05/ HC-06
+SoftwareSerial bluetooth(ARDUINO_A0, ARDUINO_A1);  //(RX, TX) of HC-05/ HC-06
 unsigned long message_time = 0;
-int message_period = 500;
+int message_period = 100;
 unsigned message_sequance = 0;
 //String bluetooth_receiver = "";
+
 //--------------------------------------------------------------------------
 // CAU HINH THOI GIAN DO KHOANG CACH BANG CAM BIEN SIEU AM
 unsigned long ultrasonic_time = 0;
-int ultrasonic_period = 100;
+int ultrasonic_period = 200;
 
+//--------------------------------------------------------------------------
 // CAU HINH THOI GIAN DOC DU LIEU TU CAM BIEN NHIET DO
 unsigned long bmp_180_time = 0;
 int bmp_180_period = 1000;
 
+//--------------------------------------------------------------------------
 // CAU HINH THOI GIAN DOC TOA DO TU QMC5883L
 unsigned long qmc_5883l_time = 0;
 int qmc_5883l_period = 250;
 
+//--------------------------------------------------------------------------
 // CAU HINH THOI GIAN TU DONG QUAY CUA XE
 unsigned long turn_time = 0;
 int turn_period = 900;
 
 //--------------------------------------------------------------------------
-QMC5883L qmc_5883l_sensor;
+// CAU HINH THOI GIAN DOC CAM BIEN GAS
+unsigned long gas_time = 0;
+int gas_period = 1000;
+int gas_value = 1;
+int ethanol_value = 1;
+
+//--------------------------------------------------------------------------
+QMC5883LCompass qmc_5883l_sensor;
 int16_t mx, my, mz;
 float heading;
 
@@ -74,7 +90,8 @@ void setup() {
   // begin:
   Wire.begin();
   Serial.begin(9600);
-  bluetooth.begin(9600);
+
+  bluetooth.begin(38400);
 
 
   // cai dat cho L298
@@ -91,8 +108,8 @@ void setup() {
 
   // ==================== QMC5883L ============================
   qmc_5883l_sensor.init();
-  qmc_5883l_sensor.setSamplingRate(50);
-
+  
+  
   // ==================== BMP180 ============================
   bmp_180_sensor.begin();
 
@@ -101,6 +118,9 @@ void setup() {
   state = STATE_MOVE_FORWARD;
 
   driver = DRIVER_BLUETOOTH;
+
+  pinMode(ETHANOL_SENSOR, INPUT);
+  pinMode(GAS_SENSOR, INPUT);
 }
 
 void loop() {
@@ -108,15 +128,15 @@ void loop() {
 
   bluetooth_controll();
 
+  if (millis() >= message_time + message_period) {
+    message_time += message_period;
+    send_data_to_phone();
+  }
+
   if (millis() >= ultrasonic_time + ultrasonic_period) {
     ultrasonic_time += ultrasonic_period;
     read_hy_srf05_sensor();
-  }
-
-
-  if (millis() >= qmc_5883l_time + qmc_5883l_period) {
-    qmc_5883l_time += qmc_5883l_period;
-    read_qmc_5883l_sensor();
+    
   }
 
   if (millis() >= bmp_180_time + bmp_180_period) {
@@ -124,9 +144,17 @@ void loop() {
     read_bmp180_sensor();
   }
 
+  if (millis() >= qmc_5883l_time + qmc_5883l_period) {
+    qmc_5883l_time += qmc_5883l_period;
+    read_qmc_5883l_sensor();
+  }
+
   //----------------------------------------------------------------
 
-
+  if (millis() >= gas_time + gas_period) {
+    gas_time += gas_period;
+    read_gas_sensor();
+  }
 
   if (driver == DRIVER_AUTO) {
     move_auto();
@@ -142,7 +170,7 @@ void loop() {
 void send_data_to_phone() {
 
 
- // long start_time = millis();
+  // long start_time = millis();
 
   JsonDocument doc;
 
@@ -156,19 +184,20 @@ void send_data_to_phone() {
 
   doc["h"] = hight;
 
+  doc["g"] = gas_value;
+
+  doc["e"] = ethanol_value;
+
   String out;
 
   serializeJson(doc, out);
 
-  Serial.println(out);
-
-  // long temp_time = millis();
-  // long serialize_time = temp_time - start_time;
-  // Serial.println(serialize_time);
-
   bluetooth.println(out);
 
   bluetooth.flush();
+  
+ // Serial.print("out ");
+//  Serial.println(out);
 
   // long end_time = millis();
   // long run_time = end_time - start_time;
@@ -187,15 +216,13 @@ void bluetooth_controll() {
 
     if (error) {
       Serial.println(bluetooth_receiver);
-      //   Serial.print("deserializeJson() failed: ");
-      //   Serial.println(error.f_str());
       return;
     }
 
     String command = document["c"];
 
-    // //Serial.print("nhan du lieu: ");
-    Serial.println(bluetooth_receiver);
+    // Serial.print("nhan du lieu: ");
+    // Serial.println(bluetooth_receiver);
 
     if (command == "M") {
       move_command = NULL;
@@ -211,12 +238,14 @@ void bluetooth_controll() {
         driver = DRIVER_AUTO;
       }
     }
-
-    send_data_to_phone();
+    //delay(50);
+    
     // long end_time = millis();
     // long run_time = end_time - start_time;
     // Serial.println(run_time);
   }
+
+  
 }
 //------------------------------------------------------------------
 
@@ -238,13 +267,17 @@ long read_hy_srf05_sensor() {
 
   distance = duration * 0.034 / 2;
 
-  //Serial.println(distance);
+  // Serial.println(distance);
   return distance;
 }
 
 void read_qmc_5883l_sensor() {
 
-  heading = qmc_5883l_sensor.readHeading();
+  qmc_5883l_sensor.read();
+  heading = qmc_5883l_sensor.getAzimuth();
+  // Serial.println();
+  // Serial.print("heading ");
+  // Serial.println(heading);
 }
 
 void read_bmp180_sensor() {
@@ -254,18 +287,36 @@ void read_bmp180_sensor() {
   pressure = bmp_180_sensor.readPressure();
 
   hight = bmp_180_sensor.readAltitude();
+
+  // Serial.print("temperature ");
+  // Serial.print(temperature);
+  // Serial.print(" pressure ");
+  // Serial.print(pressure);
+  // Serial.print(" hight ");
+  // Serial.print(hight);
 }
 
+void read_gas_sensor() {
 
+  gas_value = digitalRead(GAS_SENSOR);
+  ethanol_value = digitalRead(ETHANOL_SENSOR);
+
+  // Serial.println();
+  // Serial.print("gas value ");
+  // Serial.print(gas_value);
+
+  // Serial.print(" ethanol value ");
+  // Serial.println(ethanol_value);
+}
 
 //------------------------------------------------------------------
-// di chuyen theo chi dan bang bluetooth
+// Move according to the instructions via Bluetooth.
 void move_by_bluetooth(JsonDocument document) {
 
   if (document == NULL) {
     return;
   }
-  
+
 
   // Serial.println("move to xx");
   float x = document["x"].as<float>();
@@ -276,14 +327,14 @@ void move_by_bluetooth(JsonDocument document) {
   // Serial.println(y);
 
   if (x >= 0.5) {
-    //Serial.println("chay sang trai");
+    
     turn_left();
   }
 
 
   if (x <= -0.5) {
-    // Serial.println("chay sang phai");
     turn_rigt();
+    
   }
 
   if (x == 0 && y == 0) {
@@ -323,13 +374,14 @@ void move_auto() {
     if (random == 0) {
       state = STATE_TURN_LEFT;
       // Serial.println("chay sang trai");
-      turn_left();
+      
+      turn_rigt();
     }
 
     if (random == 1) {
       state = STATE_TURN_RIGHT;
       // Serial.println("chay sang phai");
-      turn_rigt();
+      turn_left();
     }
   }
 
@@ -351,13 +403,16 @@ void backward() {
 }
 
 void turn_left() {
-  left_forward();
-  right_backwoard();
+  right_forward();
+  left_backward();
 }
 
 void turn_rigt() {
-  right_forward();
-  left_backward();
+
+  left_forward();
+  right_backwoard();
+
+  
 }
 
 //------------------------------------------------------------------
