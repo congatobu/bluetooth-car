@@ -1,17 +1,16 @@
 #include <SoftwareSerial.h>
-#include <ArduinoJson.h>
-#include <Adafruit_BMP085.h>
+#include <Adafruit_BMP280.h>
 #include <QMC5883LCompass.h>
-#include <Wire.h>
-#include "Directions.h"
-//--------------------------------------------
+#include <MPU6050.h>
+
+//========================= PIN DEFINITION ========================
 #define ARDUINO_A0 A0
 #define ARDUINO_A1 A1
 #define ARDUINO_A2 A2
 #define ARDUINO_A3 A3
 #define ARDUINO_SDA A4
 #define ARDUINO_SCL A5
-//--------------------------------------------
+
 #define L298N_ENA 10
 #define L298N_IN1 6
 #define L298N_IN2 7
@@ -19,439 +18,436 @@
 #define L298N_IN4 9
 #define L298N_ENB 5
 
+#define SIG_SERVO 11
 #define GAS_SENSOR 12
-
 #define ETHANOL_SENSOR 13
 
+#define HY_SRF_ECHO A0
+#define HY_SRF_TRIGGER A1
+//========================= BLUETOOTH ===========================
+#define START_BYTE_1 0xBB
+#define START_BYTE_2 0xCC
+#define END_BYTE 0xFF
 
-#define MAX_DISTANCE 30
-#define WHEEL_SPEED 150
-#define SERVO_INTERVL = 20
 
-//--------------------------------------------
-#define HY_SRF_TRIGGER A2
-#define HY_SRF_ECHO A3
-long distance;
+#define RING_BUFFER_SIZE 32
 
-//--------------------------------------------------------------------------
-// CAU HINH GUI MESSAGE QUA BLUETOOTH
-SoftwareSerial bluetooth(ARDUINO_A0, ARDUINO_A1);  //(RX, TX) of HC-05/ HC-06
-unsigned long message_time = 0;
-int message_period = 100;
-unsigned message_sequance = 0;
-//String bluetooth_receiver = "";
+uint8_t ringBuffer[RING_BUFFER_SIZE];
+uint16_t head = 0;
+uint16_t tail = 0;
 
-//--------------------------------------------------------------------------
-// CAU HINH THOI GIAN DO KHOANG CACH BANG CAM BIEN SIEU AM
-unsigned long ultrasonic_time = 0;
-int ultrasonic_period = 200;
 
-//--------------------------------------------------------------------------
-// CAU HINH THOI GIAN DOC DU LIEU TU CAM BIEN NHIET DO
-unsigned long bmp_180_time = 0;
-int bmp_180_period = 1000;
+//========================= CONST VALUES ===========================
+const int MAX_DISTANCE = 30;
+const int WHEEL_SPEED = 150;
 
-//--------------------------------------------------------------------------
-// CAU HINH THOI GIAN DOC TOA DO TU QMC5883L
-unsigned long qmc_5883l_time = 0;
-int qmc_5883l_period = 250;
+//========================= GLOBAL VARIABLES =======================
+SoftwareSerial bluetooth(ARDUINO_A3, ARDUINO_A2);  // RX, TX
+QMC5883LCompass qmc5883lSensor;
+Adafruit_BMP280 bmp280Sensor;
+MPU6050 mpu6050;
 
-//--------------------------------------------------------------------------
-// CAU HINH THOI GIAN TU DONG QUAY CUA XE
-unsigned long turn_time = 0;
-int turn_period = 900;
 
-//--------------------------------------------------------------------------
-// CAU HINH THOI GIAN DOC CAM BIEN GAS
-unsigned long gas_time = 0;
-int gas_period = 1000;
+float temperature, pressure, hight;
+float heading;
 int gas_value = 1;
 int ethanol_value = 1;
-
-//--------------------------------------------------------------------------
-QMC5883LCompass qmc_5883l_sensor;
-int16_t mx, my, mz;
-float heading;
-
-//---------------------------------------------------------------------------
-Adafruit_BMP085 bmp_180_sensor;
-float temperature;
-float pressure;
-float hight;
+long distance;
 
 
-//---------------------------------------------------------------------------
-// bien dieu khien
-State state = STATE_STOP;
-Driver driver = DRIVER_BLUETOOTH;
-JsonDocument move_command;
 
+float ax_g, ay_g, az_g;
+float gx_dps, gy_dps, gz_dps;
+
+struct Timer {
+  unsigned long last_time;
+  int interval;
+};
+
+Timer messageTimer = { 0, 100 };
+Timer distanceTimer = { 0, 100 };
+Timer environmentalTimer = { 0, 1000 };
+Timer compassTimer = { 0, 100 };
+Timer airQualityTimer = { 0, 1000 };
+
+Timer t_turn = { 0, 900 };
+Timer mpuTimer = { 0, 100 };
+
+
+String move_command;
+
+
+
+//========================= SETUP ===========================
 void setup() {
-  // begin:
-  Wire.begin();
+
   Serial.begin(9600);
-
-  bluetooth.begin(38400);
-
-
-  // cai dat cho L298
+  
+  bluetooth.begin(115200);
+  
   pinMode(L298N_ENA, OUTPUT);
+  pinMode(L298N_ENB, OUTPUT);
   pinMode(L298N_IN1, OUTPUT);
   pinMode(L298N_IN2, OUTPUT);
   pinMode(L298N_IN3, OUTPUT);
   pinMode(L298N_IN4, OUTPUT);
-  pinMode(L298N_ENB, OUTPUT);
 
-  // cai dat cho ultra sonic hy srf05
   pinMode(HY_SRF_ECHO, INPUT);
   pinMode(HY_SRF_TRIGGER, OUTPUT);
 
-  // ==================== QMC5883L ============================
-  qmc_5883l_sensor.init();
-  
-  
-  // ==================== BMP180 ============================
-  bmp_180_sensor.begin();
-
-  Serial.println("Setup Complete");
-
-  state = STATE_MOVE_FORWARD;
-
-  driver = DRIVER_BLUETOOTH;
-
   pinMode(ETHANOL_SENSOR, INPUT);
   pinMode(GAS_SENSOR, INPUT);
-}
+  
+  qmc5883lSensor.init();
+  
+  bmp280Sensor.begin(0x76);
+  bmp280Sensor.setSampling(
+    Adafruit_BMP280::MODE_NORMAL,
+    Adafruit_BMP280::SAMPLING_X2,
+    Adafruit_BMP280::SAMPLING_X16,
+    Adafruit_BMP280::FILTER_X16,
+    Adafruit_BMP280::STANDBY_MS_500);
 
-void loop() {
-
-
-  bluetooth_controll();
-
-  if (millis() >= message_time + message_period) {
-    message_time += message_period;
-    send_data_to_phone();
-  }
-
-  if (millis() >= ultrasonic_time + ultrasonic_period) {
-    ultrasonic_time += ultrasonic_period;
-    read_hy_srf05_sensor();
-    
-  }
-
-  if (millis() >= bmp_180_time + bmp_180_period) {
-    bmp_180_time += bmp_180_period;
-    read_bmp180_sensor();
-  }
-
-  if (millis() >= qmc_5883l_time + qmc_5883l_period) {
-    qmc_5883l_time += qmc_5883l_period;
-    read_qmc_5883l_sensor();
-  }
-
-  //----------------------------------------------------------------
-
-  if (millis() >= gas_time + gas_period) {
-    gas_time += gas_period;
-    read_gas_sensor();
-  }
-
-  if (driver == DRIVER_AUTO) {
-    move_auto();
+  //==============================================================
+  mpu6050.initialize();
+  
+  
+  
+  if (!mpu6050.testConnection()) {
+    Serial.println("MPU6050 connection failed!");
   } else {
-    move_by_bluetooth(move_command);
+    Serial.println("MPU6050 connected.");
   }
-}
-
-
-
-//------------------------------------------------------------------
-
-void send_data_to_phone() {
-
-
-  // long start_time = millis();
-
-  JsonDocument doc;
-
-  doc["d"] = distance;
-
-  doc["a"] = heading;
-
-  doc["t"] = temperature;
-
-  doc["p"] = pressure;
-
-  doc["h"] = hight;
-
-  doc["g"] = gas_value;
-
-  doc["e"] = ethanol_value;
-
-  String out;
-
-  serializeJson(doc, out);
-
-  bluetooth.println(out);
-
-  bluetooth.flush();
   
- // Serial.print("out ");
-//  Serial.println(out);
-
-  // long end_time = millis();
-  // long run_time = end_time - start_time;
-  //Serial.println(run_time);
-}
-
-//------------------------------------------------------------------
-
-void bluetooth_controll() {
-  if (bluetooth.available()) {
-    // long start_time = millis();
-    String bluetooth_receiver = bluetooth.readStringUntil('\n');
-    JsonDocument document;
-    DeserializationError error = deserializeJson(document, bluetooth_receiver);
-
-
-    if (error) {
-      Serial.println(bluetooth_receiver);
-      return;
-    }
-
-    String command = document["c"];
-
-    // Serial.print("nhan du lieu: ");
-    // Serial.println(bluetooth_receiver);
-
-    if (command == "M") {
-      move_command = NULL;
-      move_command = document;
-    }
-
-    if (command == "D") {
-      String dri = document["m"];
-      if (dri == "m") {
-        driver = DRIVER_BLUETOOTH;
-      }
-      if (dri == "a") {
-        driver = DRIVER_AUTO;
-      }
-    }
-    //delay(50);
-    
-    // long end_time = millis();
-    // long run_time = end_time - start_time;
-    // Serial.println(run_time);
+  while (bluetooth.available()) {
+    bluetooth.read();
   }
 
+  Serial.println("Setup Complete");
+  Serial.println("---------------------------------------------------------------");
+  
   
 }
-//------------------------------------------------------------------
 
-long read_hy_srf05_sensor() {
+//========================= LOOP ===========================
+void loop() {
+  
 
-  long duration;
+  readBluetoothToRingBuffer();       // Đọc dữ liệu từ Bluetooth vào ring buffer
+  
+  parseBluetoothRingBuffer();  // Phân tích và xử lý gói tin
 
-  digitalWrite(HY_SRF_TRIGGER, LOW);
+  if (millis() - messageTimer.last_time >= messageTimer.interval) {
+    messageTimer.last_time = millis();
+    sendCarSensorPacket();
+  }
 
-  delayMicroseconds(2);
+  if (millis() - mpuTimer.last_time >= mpuTimer.interval) {
+    mpuTimer.last_time = millis();
+    readMpuSensor();
+  }
 
-  digitalWrite(HY_SRF_TRIGGER, HIGH);
+  if (millis() - distanceTimer.last_time >= distanceTimer.interval) {
+    distanceTimer.last_time = millis();
+    readDistanceSensor();
+  }
 
-  delayMicroseconds(10);
+  if (millis() - environmentalTimer.last_time >= environmentalTimer.interval) {
+    environmentalTimer.last_time = millis();
+    readEnvironmentalSensor();
+  }
 
-  digitalWrite(HY_SRF_TRIGGER, LOW);
+  if (millis() - compassTimer.last_time >= compassTimer.interval) {
+    compassTimer.last_time = millis();
+    readCompassHeading();
+  }
 
-  duration = pulseIn(HY_SRF_ECHO, HIGH);
+  if (millis() - airQualityTimer.last_time >= airQualityTimer.interval) {
+    airQualityTimer.last_time = millis();
+    readAirQualitySensors();
+  }
 
-  distance = duration * 0.034 / 2;
 
-  // Serial.println(distance);
-  return distance;
 }
 
-void read_qmc_5883l_sensor() {
+//========================= SENSOR FUNCTIONS ===========================
 
-  qmc_5883l_sensor.read();
-  heading = qmc_5883l_sensor.getAzimuth();
-  // Serial.println();
-  // Serial.print("heading ");
-  // Serial.println(heading);
+void readMpuSensor() {
+  int16_t ax, ay, az;
+  int16_t gx, gy, gz;
+  // Đọc dữ liệu raw
+  mpu6050.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+
+  // Scale factor theo datasheet:
+  // Gia tốc: ±2g → 1g = 16384
+  // Gyro: ±250 deg/s → 1 deg/s = 131
+  ax_g = ax / 16384.0;
+  ay_g = ay / 16384.0;
+  az_g = az / 16384.0;
+
+  gx_dps = gx / 131.0;
+  gy_dps = gy / 131.0;
+  gz_dps = gz / 131.0;
 }
 
-void read_bmp180_sensor() {
-
-  temperature = bmp_180_sensor.readTemperature();
-
-  pressure = bmp_180_sensor.readPressure();
-
-  hight = bmp_180_sensor.readAltitude();
-
-  // Serial.print("temperature ");
-  // Serial.print(temperature);
-  // Serial.print(" pressure ");
-  // Serial.print(pressure);
-  // Serial.print(" hight ");
-  // Serial.print(hight);
+void readEnvironmentalSensor() {
+  temperature = bmp280Sensor.readTemperature();
+  pressure = bmp280Sensor.readPressure();
+  hight = bmp280Sensor.readAltitude(1013.25);
 }
 
-void read_gas_sensor() {
+void readCompassHeading() {
+  qmc5883lSensor.read();
+  heading = fmod(qmc5883lSensor.getAzimuth() + 360.0, 360.0);
+  // Serial.print("heading: "); Serial.println(heading);
+}
 
+void readAirQualitySensors() {
   gas_value = digitalRead(GAS_SENSOR);
   ethanol_value = digitalRead(ETHANOL_SENSOR);
-
-  // Serial.println();
-  // Serial.print("gas value ");
-  // Serial.print(gas_value);
-
-  // Serial.print(" ethanol value ");
-  // Serial.println(ethanol_value);
 }
 
-//------------------------------------------------------------------
-// Move according to the instructions via Bluetooth.
-void move_by_bluetooth(JsonDocument document) {
+void readDistanceSensor() {
+  digitalWrite(HY_SRF_TRIGGER, LOW);
+  delayMicroseconds(2);
+  digitalWrite(HY_SRF_TRIGGER, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(HY_SRF_TRIGGER, LOW);
+  distance = pulseIn(HY_SRF_ECHO, HIGH) / 58.0;
+}
 
-  if (document == NULL) {
+
+//========================= BLUETOOTH ===========================
+
+
+// Hàm thêm 1 byte vào ring buffer
+void ringWrite(uint8_t data) {
+  uint16_t next = (head + 1) % RING_BUFFER_SIZE;
+  if (next != tail) {  // tránh tràn
+    ringBuffer[head] = data;
+    head = next;
+  }
+}
+
+// Hàm đọc 1 byte từ ring buffer
+bool ringRead(uint8_t* data) {
+  if (head == tail) return false;  // buffer rỗng
+  *data = ringBuffer[tail];
+  tail = (tail + 1) % RING_BUFFER_SIZE;
+  return true;
+}
+
+// Đọc từ bluetooth và nạp vào buffer
+void readBluetoothToRingBuffer() {
+  while (bluetooth.available()) {
+    ringWrite(bluetooth.read());
+  }
+}
+void parseBluetoothRingBuffer() {
+  static enum {
+    WAIT_START1,
+    WAIT_START2,
+    WAIT_ID,
+    WAIT_LEN,
+    READ_DATA,
+    READ_CHECKSUM,
+    WAIT_END
+  } state = WAIT_START1;
+
+  static uint8_t id = 0;
+  static uint8_t length = 0;
+  static uint8_t index = 0;
+  static uint8_t checksum = 0;
+  static uint8_t buffer[32];
+
+  uint8_t b;
+  while (ringRead(&b)) {
+    
+    switch (state) {
+      case WAIT_START1:
+        if (b == 0xBB) state = WAIT_START2;
+        break;
+
+      case WAIT_START2:
+        if (b == 0xCC) state = WAIT_ID;
+        else state = WAIT_START1;
+        break;
+
+      case WAIT_ID:
+        id = b;
+        state = WAIT_LEN;
+        break;
+
+      case WAIT_LEN:
+        length = b;
+        if (length == 0 || length > 250) {
+          state = WAIT_START1;
+        } else {
+          index = 0;
+          checksum = 0;
+          state = READ_DATA;
+        }
+        break;
+
+      case READ_DATA:
+        buffer[index++] = b;
+        checksum ^= b;
+        if (index >= length) {
+          state = READ_CHECKSUM;
+        }
+        break;
+
+      case READ_CHECKSUM:
+        if (b == checksum) {
+          state = WAIT_END;
+        } else {
+          Serial.println("Checksum error");
+          if (b == 0xBB) {
+            state = WAIT_START2;
+          } else {
+            state = WAIT_START1;
+          }
+        }
+        break;
+
+      case WAIT_END:
+        if (b == 0xFF) {
+          processCommand(buffer, length);
+          state = WAIT_START1;
+        } else {
+          Serial.println("End byte error");
+          // Resync nhanh
+          if (b == 0xBB) {
+            state = WAIT_START2;
+          } else {
+            state = WAIT_START1;
+          }
+        }
+        break;
+    }
+  }
+}
+
+void processCommand(byte* data, byte length) {
+  if (length < 3) {
+   // Serial.println("Invalid command length");
+    return;
+  }
+  
+  byte mode = data[0];             // Chế độ: 0 = app, 1 = tự động
+  char direction = (char)data[1];  // Hướng di chuyển
+  byte speed = data[2];            // Tốc độ
+  
+
+  // Hiển thị thông tin nhận được
+  // Serial.print("Direction: "); Serial.println(direction);
+  // Serial.print("Speed: "); Serial.println(speed);
+  // Serial.print("Mode: "); Serial.println(mode == 0 ? "Manual" : "Auto");
+
+  if (mode == 0) {
+    // Serial.println("Auto mode active - bỏ qua lệnh điều khiển");
     return;
   }
 
-
-  // Serial.println("move to xx");
-  float x = document["x"].as<float>();
-  float y = document["y"].as<float>();
-
-
-  // Serial.print(x);
-  // Serial.println(y);
-
-  if (x >= 0.5) {
-    
-    turn_left();
-  }
-
-
-  if (x <= -0.5) {
-    turn_rigt();
-    
-  }
-
-  if (x == 0 && y == 0) {
-    left_stop();
-    right_stop();
-  }
-
-  if (y >= 0.5) {
-    forward();
-  }
-
-  if (y <= -0.5) {
-    backward();
+  // Xử lý điều hướng
+  switch (direction) {
+    case 'f':
+      // Serial.println("Command: Forward");
+      moveForward(speed);
+      break;
+    case 'b':
+      // Serial.println("Command: Backward");
+      moveBackward(speed);
+      break;
+    case 'l':
+      // Serial.println("Command: Turn Left");
+      turnLeft(speed);
+      break;
+    case 'r':
+      // Serial.println("Command: Turn Right");
+      turnRight(speed);
+      break;
+    case 'p':
+      // Serial.println("Command: Stop");
+      stopMotors();
+      break;
+    default:
+      // Serial.print("Unknown command: ");
+      // Serial.println(direction);
+      stopMotors();
+      break;
   }
 }
-//------------------------------------------------------------------
-// di chuyen tu dong
 
-void move_auto() {
 
-  //  Serial.println(distance);
-  if (state == STATE_MOVE_FORWARD && distance > 1 && distance < MAX_DISTANCE) {
 
-    // Serial.print(distance);
-    // Serial.println(" - doi trang thai sang quay trai, phai");
-    state = STATE_TURN;
-    turn_time = millis();
+//---------------------------------------------------------------------------------
+void sendCarSensorPacket() {
+  int16_t data[13] = {
+    (int16_t)(temperature * 100),
+    (int16_t)(pressure / 10),  // Giảm độ phân giải để vừa int16
+    (int16_t)(hight * 100),
+    (int16_t)(heading * 100),
+    (int16_t)(distance * 100),
+    (int16_t)(gas_value * 100),
+    (int16_t)(ethanol_value * 100),
+    (int16_t)(gx_dps * 100),
+    (int16_t)(gy_dps * 100),
+    (int16_t)(gz_dps * 100),
+    (int16_t)(ax_g * 100),
+    (int16_t)(ay_g * 100),
+    (int16_t)(az_g * 100)
+  };
+
+  byte* ptr = (byte*)data;
+  uint16_t payloadSize = sizeof(int16_t) * 13;
+
+  byte checksum = 0;
+  for (int i = 0; i < payloadSize; i++) {
+    checksum ^= ptr[i];
   }
 
-  if (state != STATE_MOVE_FORWARD && millis() >= turn_time + turn_period) {
-    state = STATE_MOVE_FORWARD;
-  }
-
-  if (state == STATE_TURN) {
-    int random = rand() % 2;
-
-    if (random == 0) {
-      state = STATE_TURN_LEFT;
-      // Serial.println("chay sang trai");
-      
-      turn_rigt();
-    }
-
-    if (random == 1) {
-      state = STATE_TURN_RIGHT;
-      // Serial.println("chay sang phai");
-      turn_left();
-    }
-  }
-
-  if (state == STATE_MOVE_FORWARD) {
-    // Serial.println("chay thang");
-    forward();
-  }
-}
-//------------------------------------------------------------------
-
-void forward() {
-  left_forward();
-  right_forward();
-}
-
-void backward() {
-  left_backward();
-  right_backwoard();
-}
-
-void turn_left() {
-  right_forward();
-  left_backward();
-}
-
-void turn_rigt() {
-
-  left_forward();
-  right_backwoard();
-
-  
-}
-
-//------------------------------------------------------------------
-
-void left_forward() {
-  analogWrite(L298N_ENB, WHEEL_SPEED);
-  digitalWrite(L298N_IN1, LOW);
-  digitalWrite(L298N_IN2, HIGH);
-}
-
-void left_backward() {
-  analogWrite(L298N_ENB, WHEEL_SPEED);
-  digitalWrite(L298N_IN1, HIGH);
-  digitalWrite(L298N_IN2, LOW);
+  bluetooth.write(0xAA);
+  bluetooth.write(0x55);
+  bluetooth.write((byte)(payloadSize >> 8));
+  bluetooth.write((byte)payloadSize);
+  bluetooth.write(ptr, payloadSize);
+  bluetooth.write(checksum);
+  bluetooth.write(0xFF);
 }
 
 
-void left_stop() {
-  digitalWrite(L298N_IN1, LOW);
-  digitalWrite(L298N_IN2, LOW);
+
+//========================= AUTO MOVE ===========================
+
+
+
+//========================= MOTOR FUNCTIONS ===========================
+void moveMotor(int in1, int in2, int in3, int in4, int ena, int enb) {
+  digitalWrite(L298N_IN1, in1);
+  digitalWrite(L298N_IN2, in2);
+  digitalWrite(L298N_IN3, in3);
+  digitalWrite(L298N_IN4, in4);
+  analogWrite(L298N_ENA, ena);
+  analogWrite(L298N_ENB, enb);
 }
 
-//------------------------------------------------------------------
-
-void right_forward() {
-  analogWrite(L298N_ENA, WHEEL_SPEED);
-  digitalWrite(L298N_IN3, HIGH);
-  digitalWrite(L298N_IN4, LOW);
+void moveForward(int speed) {
+  moveMotor(LOW, HIGH, HIGH, LOW, speed, speed);
 }
 
-void right_backwoard() {
-  analogWrite(L298N_ENA, WHEEL_SPEED);
-  digitalWrite(L298N_IN3, LOW);
-  digitalWrite(L298N_IN4, HIGH);
+void moveBackward(int speed) {
+  moveMotor(HIGH, LOW, LOW, HIGH, speed, speed);
 }
 
-void right_stop() {
-  digitalWrite(L298N_IN3, LOW);
-  digitalWrite(L298N_IN4, LOW);
+void stopMotors() {
+  moveMotor(LOW, LOW, LOW, LOW, 0, 0);
 }
 
-//------------------------------------------------------------------
+void turnLeft(int speed) {
+  moveMotor(LOW, HIGH, LOW, HIGH, speed, speed);
+}
+
+void turnRight(int speed) {
+  moveMotor(HIGH, LOW, HIGH, LOW, speed, speed);
+}
