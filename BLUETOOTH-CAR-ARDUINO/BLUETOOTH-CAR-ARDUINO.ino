@@ -39,7 +39,7 @@ uint16_t tail = 0;
 
 //========================= CONST VALUES ===========================
 const int MAX_DISTANCE = 30;
-const int WHEEL_SPEED = 150;
+
 
 //========================= GLOBAL VARIABLES =======================
 SoftwareSerial bluetooth(ARDUINO_A3, ARDUINO_A2);  // RX, TX
@@ -69,8 +69,6 @@ Timer distanceTimer = { 0, 100 };
 Timer environmentalTimer = { 0, 1000 };
 Timer compassTimer = { 0, 100 };
 Timer airQualityTimer = { 0, 1000 };
-
-Timer t_turn = { 0, 900 };
 Timer mpuTimer = { 0, 100 };
 
 
@@ -114,9 +112,9 @@ void setup() {
   
   
   if (!mpu6050.testConnection()) {
-    Serial.println("MPU6050 connection failed!");
+    //Serial.println("MPU6050 connection failed!");
   } else {
-    Serial.println("MPU6050 connected.");
+    //Serial.println("MPU6050 connected.");
   }
   
   while (bluetooth.available()) {
@@ -124,7 +122,7 @@ void setup() {
   }
 
   Serial.println("Setup Complete");
-  Serial.println("---------------------------------------------------------------");
+  //Serial.println("---------------------------------------------------------------");
   
   
 }
@@ -258,7 +256,7 @@ void parseBluetoothRingBuffer() {
   static uint8_t length = 0;
   static uint8_t index = 0;
   static uint8_t checksum = 0;
-  static uint8_t buffer[32];
+  static uint8_t buffer[RING_BUFFER_SIZE];
 
   uint8_t b;
   while (ringRead(&b)) {
@@ -340,14 +338,11 @@ void processCommand(byte* data, byte length) {
   
 
   // Hiển thị thông tin nhận được
-  // Serial.print("Direction: "); Serial.println(direction);
-  // Serial.print("Speed: "); Serial.println(speed);
-  // Serial.print("Mode: "); Serial.println(mode == 0 ? "Manual" : "Auto");
-
-  if (mode == 0) {
-    // Serial.println("Auto mode active - bỏ qua lệnh điều khiển");
-    return;
-  }
+  Serial.println("-----------------------------------------------------");
+  Serial.print("Mode: "); Serial.println(mode == 0 ? "Auto" : "Manual");
+  Serial.print("Direction: "); Serial.println(direction);
+  Serial.print("Speed: "); Serial.println(speed);
+ 
 
   // Xử lý điều hướng
   switch (direction) {
@@ -417,11 +412,6 @@ void sendCarSensorPacket() {
 }
 
 
-
-//========================= AUTO MOVE ===========================
-
-
-
 //========================= MOTOR FUNCTIONS ===========================
 void moveMotor(int in1, int in2, int in3, int in4, int ena, int enb) {
   digitalWrite(L298N_IN1, in1);
@@ -445,9 +435,10 @@ void stopMotors() {
 }
 
 void turnLeft(int speed) {
-  moveMotor(LOW, HIGH, LOW, HIGH, speed, speed);
+  moveMotor(HIGH, LOW, HIGH, LOW, speed, speed);
+  
 }
 
 void turnRight(int speed) {
-  moveMotor(HIGH, LOW, HIGH, LOW, speed, speed);
+  moveMotor(LOW, HIGH, LOW, HIGH, speed, speed);
 }
