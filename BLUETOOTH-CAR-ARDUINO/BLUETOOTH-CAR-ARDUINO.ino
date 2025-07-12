@@ -18,9 +18,10 @@
 #define L298N_IN4 9
 #define L298N_ENB 5
 
-#define SIG_SERVO 11
-#define GAS_SENSOR 12
-#define ETHANOL_SENSOR 13
+#define SIG_SERVO 12
+
+#define GAS_SENSOR 11
+#define ETHANOL_SENSOR 4
 
 #define HY_SRF_ECHO A0
 #define HY_SRF_TRIGGER A1
@@ -29,6 +30,7 @@
 #define START_BYTE_2 0xCC
 #define END_BYTE 0xFF
 
+#define DEBUG_BT true  // Bật/Tắt debug qua Serial
 
 #define RING_BUFFER_SIZE 32
 
@@ -65,11 +67,11 @@ struct Timer {
 };
 
 Timer messageTimer = { 0, 100 };
-Timer distanceTimer = { 0, 100 };
-Timer environmentalTimer = { 0, 1000 };
-Timer compassTimer = { 0, 100 };
-Timer airQualityTimer = { 0, 1000 };
-Timer mpuTimer = { 0, 100 };
+Timer distanceTimer = { 0, 150 };
+Timer environmentalTimer = { 0, 2000 };
+Timer compassTimer = { 0, 150 };
+Timer airQualityTimer = { 0, 2000 };
+Timer mpuTimer = { 0, 120 };
 
 
 String move_command;
@@ -80,9 +82,9 @@ String move_command;
 void setup() {
 
   Serial.begin(9600);
-  
+
   bluetooth.begin(115200);
-  
+
   pinMode(L298N_ENA, OUTPUT);
   pinMode(L298N_ENB, OUTPUT);
   pinMode(L298N_IN1, OUTPUT);
@@ -95,9 +97,9 @@ void setup() {
 
   pinMode(ETHANOL_SENSOR, INPUT);
   pinMode(GAS_SENSOR, INPUT);
-  
+
   qmc5883lSensor.init();
-  
+
   bmp280Sensor.begin(0x76);
   bmp280Sensor.setSampling(
     Adafruit_BMP280::MODE_NORMAL,
@@ -108,31 +110,29 @@ void setup() {
 
   //==============================================================
   mpu6050.initialize();
-  
-  
-  
+
+
+
   if (!mpu6050.testConnection()) {
-    //Serial.println("MPU6050 connection failed!");
+    Serial.println("MPU6050 connection failed!");
   } else {
-    //Serial.println("MPU6050 connected.");
+    Serial.println("MPU6050 connected.");
   }
-  
+
   while (bluetooth.available()) {
     bluetooth.read();
   }
 
   Serial.println("Setup Complete");
-  //Serial.println("---------------------------------------------------------------");
-  
-  
+  Serial.println("---------------------------------------------------------------");
 }
 
 //========================= LOOP ===========================
 void loop() {
-  
 
-  readBluetoothToRingBuffer();       // Đọc dữ liệu từ Bluetooth vào ring buffer
-  
+
+  readBluetoothToRingBuffer();  // Đọc dữ liệu từ Bluetooth vào ring buffer
+
   parseBluetoothRingBuffer();  // Phân tích và xử lý gói tin
 
   if (millis() - messageTimer.last_time >= messageTimer.interval) {
@@ -164,8 +164,6 @@ void loop() {
     airQualityTimer.last_time = millis();
     readAirQualitySensors();
   }
-
-
 }
 
 //========================= SENSOR FUNCTIONS ===========================
@@ -192,17 +190,38 @@ void readEnvironmentalSensor() {
   temperature = bmp280Sensor.readTemperature();
   pressure = bmp280Sensor.readPressure();
   hight = bmp280Sensor.readAltitude(1013.25);
+  //Serial.print("temperature: "); Serial.println(temperature);
+  //Serial.print("pressure: "); Serial.println(pressure);
+  //Serial.print("hight: "); Serial.println(hight);
 }
 
 void readCompassHeading() {
   qmc5883lSensor.read();
   heading = fmod(qmc5883lSensor.getAzimuth() + 360.0, 360.0);
-  // Serial.print("heading: "); Serial.println(heading);
+  //Serial.print("heading: "); Serial.println(heading);
 }
 
 void readAirQualitySensors() {
-  gas_value = digitalRead(GAS_SENSOR);
-  ethanol_value = digitalRead(ETHANOL_SENSOR);
+
+  int gasDetected = digitalRead(GAS_SENSOR);
+  int ethanolDetected = digitalRead(ETHANOL_SENSOR);
+
+  if (gasDetected == LOW) {
+    gas_value = 1;
+  } else {
+    gas_value = 0;
+  }
+
+  if (ethanolDetected == LOW) {
+    ethanol_value = 1;
+  } else {
+    ethanol_value = 0;
+  }
+
+  Serial.print("gas_value: ");
+  Serial.println(gas_value);
+  Serial.print("ethanol_value: ");
+  Serial.println(ethanol_value);
 }
 
 void readDistanceSensor() {
@@ -218,18 +237,18 @@ void readDistanceSensor() {
 //========================= BLUETOOTH ===========================
 
 
-// Hàm thêm 1 byte vào ring buffer
+// Add a byte to the ring buffer
 void ringWrite(uint8_t data) {
   uint16_t next = (head + 1) % RING_BUFFER_SIZE;
-  if (next != tail) {  // tránh tràn
+  if (next != tail) {  // prevent overflow
     ringBuffer[head] = data;
     head = next;
   }
 }
 
-// Hàm đọc 1 byte từ ring buffer
+// Read a byte from the ring buffer
 bool ringRead(uint8_t* data) {
-  if (head == tail) return false;  // buffer rỗng
+  if (head == tail) return false;
   *data = ringBuffer[tail];
   tail = (tail + 1) % RING_BUFFER_SIZE;
   return true;
@@ -241,6 +260,8 @@ void readBluetoothToRingBuffer() {
     ringWrite(bluetooth.read());
   }
 }
+
+
 void parseBluetoothRingBuffer() {
   static enum {
     WAIT_START1,
@@ -260,14 +281,13 @@ void parseBluetoothRingBuffer() {
 
   uint8_t b;
   while (ringRead(&b)) {
-    
     switch (state) {
       case WAIT_START1:
-        if (b == 0xBB) state = WAIT_START2;
+        if (b == START_BYTE_1) state = WAIT_START2;
         break;
 
       case WAIT_START2:
-        if (b == 0xCC) state = WAIT_ID;
+        if (b == START_BYTE_2) state = WAIT_ID;
         else state = WAIT_START1;
         break;
 
@@ -278,7 +298,8 @@ void parseBluetoothRingBuffer() {
 
       case WAIT_LEN:
         length = b;
-        if (length == 0 || length > 250) {
+        if (length == 0 || length > RING_BUFFER_SIZE) {
+          if (DEBUG_BT) Serial.println("Invalid length");
           state = WAIT_START1;
         } else {
           index = 0;
@@ -288,91 +309,77 @@ void parseBluetoothRingBuffer() {
         break;
 
       case READ_DATA:
-        buffer[index++] = b;
-        checksum ^= b;
-        if (index >= length) {
-          state = READ_CHECKSUM;
+        if (index < RING_BUFFER_SIZE) {
+          buffer[index++] = b;
+          checksum ^= b;
+        } else {
+          if (DEBUG_BT) Serial.println("Buffer overflow!");
+          state = WAIT_START1;
         }
+        if (index >= length) state = READ_CHECKSUM;
         break;
 
       case READ_CHECKSUM:
         if (b == checksum) {
           state = WAIT_END;
         } else {
-          Serial.println("Checksum error");
-          if (b == 0xBB) {
-            state = WAIT_START2;
-          } else {
-            state = WAIT_START1;
-          }
+          if (DEBUG_BT) Serial.println("Checksum error");
+          state = (b == START_BYTE_1) ? WAIT_START2 : WAIT_START1;
         }
         break;
 
       case WAIT_END:
-        if (b == 0xFF) {
-          processCommand(buffer, length);
-          state = WAIT_START1;
+        if (b == END_BYTE) {
+          handleParsedPacket(id, buffer, length);  // xử lý theo ID
         } else {
-          Serial.println("End byte error");
-          // Resync nhanh
-          if (b == 0xBB) {
-            state = WAIT_START2;
-          } else {
-            state = WAIT_START1;
-          }
+          if (DEBUG_BT) Serial.println("Missing end byte");
         }
+        state = WAIT_START1;
         break;
     }
   }
 }
 
-void processCommand(byte* data, byte length) {
-  if (length < 3) {
-   // Serial.println("Invalid command length");
-    return;
-  }
-  
-  byte mode = data[0];             // Chế độ: 0 = app, 1 = tự động
-  char direction = (char)data[1];  // Hướng di chuyển
-  byte speed = data[2];            // Tốc độ
-  
 
-  // Hiển thị thông tin nhận được
-  Serial.println("-----------------------------------------------------");
-  Serial.print("Mode: "); Serial.println(mode == 0 ? "Auto" : "Manual");
-  Serial.print("Direction: "); Serial.println(direction);
-  Serial.print("Speed: "); Serial.println(speed);
- 
+void handleParsedPacket(uint8_t id, byte* data, byte length) {
 
-  // Xử lý điều hướng
-  switch (direction) {
-    case 'f':
-      // Serial.println("Command: Forward");
-      moveForward(speed);
+  switch (id) {
+    case 0x02:  // Gói điều khiển xe
+      if (length >= 3) {
+        byte mode = data[0];
+        char direction = (char)data[1];
+        byte speed = data[2];
+
+        // if (DEBUG_BT) {
+        //   Serial.print("Mode: "); Serial.println(mode);
+        //   Serial.print("Dir: "); Serial.println(direction);
+        //   Serial.print("Speed: "); Serial.println(speed);
+        // }
+
+        switch (direction) {
+          case 'f': moveForward(speed); break;
+          case 'b': moveBackward(speed); break;
+          case 'l': turnLeft(speed); break;
+          case 'r': turnRight(speed); break;
+          case 'p': stopMotors(); break;
+          default: stopMotors(); break;
+        }
+      }
       break;
-    case 'b':
-      // Serial.println("Command: Backward");
-      moveBackward(speed);
+
+    case 0x01:
+
       break;
-    case 'l':
-      // Serial.println("Command: Turn Left");
-      turnLeft(speed);
-      break;
-    case 'r':
-      // Serial.println("Command: Turn Right");
-      turnRight(speed);
-      break;
-    case 'p':
-      // Serial.println("Command: Stop");
-      stopMotors();
-      break;
+
     default:
-      // Serial.print("Unknown command: ");
-      // Serial.println(direction);
-      stopMotors();
+      if (DEBUG_BT) {
+        Serial.print("Unknown packet ID: ");
+        Serial.println(id, HEX);
+      }
       break;
   }
 }
+
 
 
 
@@ -436,7 +443,6 @@ void stopMotors() {
 
 void turnLeft(int speed) {
   moveMotor(HIGH, LOW, HIGH, LOW, speed, speed);
-  
 }
 
 void turnRight(int speed) {
